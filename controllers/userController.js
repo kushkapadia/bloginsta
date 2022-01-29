@@ -1,0 +1,220 @@
+///const { response } = require('../app')
+const User = require('../models/User')
+const Post = require('../models/Post')
+const Follow = require('../models/Follow')
+const jwt = require('jsonwebtoken') //npm install jsonwebtoken
+//to use it for authentication via api (tokens)
+
+exports.apiGetPostsByUsername =  async function(req, res){
+    try {
+        let authorDoc = await User.findByUsername(req.params.username)
+        let posts = await Post.findByAuthorId(authorDoc._id)
+        res.json(posts)
+    } catch {
+        res.json("Sorry Invalid user requested")
+    }
+}
+
+exports.apiMustBeLoggedIn =function(req, res, next){
+    try {
+       req.apiUser =  jwt.verify(req.body.token, process.env.JWTSECRET)
+       next()
+    } catch {
+        res.json("Sorry you must provide a valid token.")
+    }
+}
+
+exports.doesUsernameExist = function(req, res){
+    User.findByUsername(req.body.username).then(function(){
+        res.json(true)
+        //find by username will return the user document, burt we need true ot false so req.json() is the value that axios wil returmn
+    }).catch(function(){
+        res.json(false)
+    })
+}
+
+exports.doesEmailExist = async function(req, res){
+  let emailBool = await User.doesEmailExist(req.body.email)
+  res.json(emailBool)
+}
+
+exports.sharedProfileData = async function(req,res,next){
+   let isVisitorsProfile = false
+    let isFollowing= false
+    if(req.session.user){
+        isVisitorsProfile = req.profileUser._id.equals(req.session.user._id)
+  isFollowing = await Follow.isVisitorFollowing(req.profileUser._id, req.visitorId)
+    }
+
+    req.isVisitorsProfile = isVisitorsProfile
+    req.isFollowing = isFollowing
+
+    //retrieve post, follower, and following counts.
+    let postCountPromise =  Post.countPostsByAuthor(req.profileUser._id)
+    let followerCountPromise =  Follow.countFollowersById(req.profileUser._id)
+    let followingCountPromise =  Follow.countFollowingById(req.profileUser._id)
+    let [postCount, followerCount, followingCount] = await Promise.all([postCountPromise, followerCountPromise, followingCountPromise])
+    //all method is going to return an array ultimately. It will be an array with values that each one of these promises resolves with.
+    //we wait for all 3 promises to get over before moving to next as we dont care about which one will get over first.
+      //----Array De structre
+ // the first item will use the 1st ivalue, the 2nd item will use the 2nd and so on.
+ //adding vairables to request object.
+ req.postCount = postCount
+ req.followerCount = followerCount
+ req.followingCount = followingCount
+ next()
+}
+
+exports.mustBeLoggedIn = function(req,res,next){
+    if(req.session.user){
+        next()
+    } else{
+        req.flash("errors", "You must be logged in to perform that action")
+        req.session.save(function(){
+            res.redirect('/')
+        })
+    }
+}
+
+exports.login = function(req, res){
+   // console.log(req.body)
+    
+    let user = new User (req.body)
+    user.login().then(function(result){
+        req.session.user = {avatar: user.avatar, username: user.data.username, _id: user.data._id}
+        //Our server will now be able to store the session data 
+        //the object which it equals to is the thing which will be unique to this paticular user
+        //our request object now has this new session object that is unique per browser visitor
+        req.session.save(function(){
+            res.redirect('/')
+        })
+    }).catch(function(e){
+        req.flash('errors', e)
+        //a is name of collection(array) of error messages. B is the message
+        //The above line: req.session.flash.errors = [e]
+       req.session.save(function(){
+        res.redirect('/')
+       })
+    })
+  //then is if promise is succesful & catch is if promise is failed
+}
+//node will make sure that a property named login is added to what is getting exported from this file
+
+
+
+exports.apiLogin = function(req, res) {
+    let user = new User(req.body)
+    user.login().then(function(result) {
+      res.json(jwt.sign({_id: user.data._id}, process.env.JWTSECRET, {expiresIn: '7d'}))
+    }).catch(function(e) {
+       res.json("Sorry")
+    })
+}
+
+
+
+exports.logout= function(req,res){
+    req.session.destroy(function(){
+        res.redirect('/')
+    })
+}
+
+
+exports.register = function(req, res){
+   // console.log(req.body)
+  //  return
+    let user = new User(req.body)
+    //req.body is the data that user just submitted
+    //new is a keyword, it is going to create a new object using this as its blueprint
+    //It is common practice between programmers to capitalize the first letter of the blueprint.
+    user.register().then(() => {
+        req.session.user = {username: user.data.username, avatar: user.avatar, _id: user.data._id}
+        req.session.save(function(){
+            res.redirect('/')
+        })
+
+    }).catch((regErrors)=>{
+       regErrors.forEach(function(error){
+            req.flash('regErrors', error)
+        })
+        req.session.save(function(){
+            res.redirect('/')
+        })
+    })
+}
+
+exports.home = async function(req, res){
+
+
+    if(req.session.user){
+        //fetch feed of posts for current user
+        let posts = await Post.getFeed(req.session.user._id)
+        res.render('home-dashboard', {posts: posts})
+        
+    }
+    else{
+        res.render('home-guest', {regErrors: req.flash('regErrors')})
+    }
+}
+
+exports.ifUserExists = function(req, res, next) {
+    User.findByUsername(req.params.username).then(function(userDocument) {
+      req.profileUser = userDocument
+      next()
+    }).catch(function() {
+      res.render("404")
+    })
+  }
+
+exports.profilePostsScreen = function(req,res){
+    // Ask our post model for posts by a certain author id 
+    Post.findByAuthorId(req.profileUser._id).then(function(posts){
+        res.render('profile', {
+            title: `Profile For ${req.profileUser.username}`,
+            currentPage: "posts",
+            posts: posts,
+            profileUsername: req.profileUser.username,
+            profileAvatar: req.profileUser.avatar,
+            isFollowing: req.isFollowing,
+            isVisitorsProfile: req.isVisitorsProfile,
+            counts: {postCount: req.postCount, followerCount: req.followerCount, followingCount: req.followingCount}
+        })
+    }).catch(function() {
+        res.render("404")
+    })
+    
+}
+
+exports.profileFollowersScreen = async function(req, res) {
+  try {
+        let followers = await Follow.getFollowersById(req.profileUser._id)
+        res.render('profile-followers', {
+        currentPage: "followers",
+        followers: followers,
+        profileUsername: req.profileUser.username,
+        profileAvatar: req.profileUser.avatar,
+        isFollowing: req.isFollowing,
+        isVisitorsProfile: req.isVisitorsProfile,
+        counts: {postCount: req.postCount, followerCount: req.followerCount, followingCount: req.followingCount}
+    })
+  } catch {
+    res.render("404")
+  }
+}
+
+exports.profileFollowingScreen = async function(req, res) {
+  try {
+        let following = await Follow.getFollowingById(req.profileUser._id)
+        res.render('profile-following', {
+        currentPage: "following",
+        following: following,
+        profileUsername: req.profileUser.username,
+        profileAvatar: req.profileUser.avatar,
+        isFollowing: req.isFollowing,
+        isVisitorsProfile: req.isVisitorsProfile,
+        counts: {postCount: req.postCount, followerCount: req.followerCount, followingCount: req.followingCount}
+    })
+  } catch {
+    res.render("404")
+  }
+}
