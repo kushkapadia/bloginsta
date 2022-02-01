@@ -96,8 +96,8 @@ export default class RegistrationForm {
   }
 
   passwordAfterDelay() {
-    if (this.password.value.length < 12) {
-      this.showValidationError(this.password, "Password must be at least 12 characters.")
+    if (this.password.value.length < 7) {
+      this.showValidationError(this.password, "Password must be at least 7 characters.")
     }
   }
 
